@@ -81,12 +81,11 @@ def createNetwork():
     # new vars for optimization
     delta_s = tf.Variable(
         name="added_perturbation",
-        initial_value=tf.random.normal([INTERVAL, 80, 80, 4], mean=(255.0 / 2), stddev=(255 * (0.01 ** 0.5))),
+        initial_value=tf.random.normal([80, 80, 4], mean=(255.0 / 2), stddev=(255 * (0.01 ** 0.5))),
         trainable=True)
 
     # input layer
     s = tf.placeholder("float", [None, 80, 80, 4])
-    optimization = tf.placeholder("bool")
     s_opt = tf.add(s, delta_s)
 
     # hidden layers
@@ -111,12 +110,19 @@ def createNetwork():
 
 def trainNetwork(s, readout, h_fc1, sess):
 
+    eps = 1  # Q values are typically 10- 30
+    q_noflap = tf.placeholder(shape=(INTERVAL,), dtype=float)
+    q_flap = tf.placeholder(shape=(INTERVAL,), dtype=float)
+    hinge_loss = tf.reduce_sum(tf.nn.relu(tf.add(tf.subtract(readout[:,0], readout[:,1]), eps)))
+    # hinge_loss = tf.nn.relu(q_noflap - q_flap + eps)
+    opt = tf.train.AdamOptimizer(LR).minimize(loss=hinge_loss)
+
     # define the cost function
     a = tf.placeholder("float", [None, ACTIONS])
     y = tf.placeholder("float", [None])
     readout_action = tf.reduce_sum(tf.multiply(readout, a), reduction_indices=1)
     cost = tf.reduce_mean(tf.square(y - readout_action))
-    train_step = tf.train.AdamOptimizer(1e-6).minimize(cost)
+    train_step = tf.train.AdamOptimizer(1e-6).minimize(loss=hinge_loss)
 
     # open up a game state to communicate with emulator
     game_state = game.GameState()
@@ -137,7 +143,8 @@ def trainNetwork(s, readout, h_fc1, sess):
     s_t = np.stack((x_t, x_t, x_t, x_t), axis=2)
 
     # saving and loading networks\
-    variables_to_restore = slim.get_variables_to_restore(exclude=["added_perturbation"])
+    vars = slim.get_variables_to_restore()
+    variables_to_restore = slim.get_variables_to_restore(exclude=['added_perturbation', 'beta1_power_1:0', 'beta2_power_1:0'])
     saver = tf.train.Saver(var_list=variables_to_restore)
     sess.run(tf.initialize_all_variables())
     checkpoint = tf.train.get_checkpoint_state("saved_networks")
@@ -146,12 +153,6 @@ def trainNetwork(s, readout, h_fc1, sess):
         print("Successfully loaded:", checkpoint.model_checkpoint_path)
     else:
         print("Could not find old network weights")
-
-    eps = 1  # Q values are typically 10- 30
-    q_noflap = tf.placeholder(shape=(INTERVAL,), dtype=float)
-    q_flap = tf.placeholder(shape=(INTERVAL,), dtype=float)
-    loss = tf.nn.relu(q_noflap - q_flap + eps)
-    opt = tf.train.AdamOptimizer(LR).minimize(loss)
 
     # start training
     epsilon = INITIAL_EPSILON
@@ -224,7 +225,8 @@ def trainNetwork(s, readout, h_fc1, sess):
             # ds generates automatically
             # then you use s+ds as your new input
             # talk after meeting have Q's
-            readout_s_ds = readout.eval(feed_dict={s : [s_opt_batch][0]})
+            q_vals = tf.placeholder("float", shape=[None, 80, 80, 4], name="q_vals") # readout_s_ds[1]
+            q_vals = readout.eval(feed_dict={s : [s_opt_batch][0]})
 
             # readout(s) = [Q(no flap), Q(flap)]
             # a = readout[target_action]
@@ -237,11 +239,11 @@ def trainNetwork(s, readout, h_fc1, sess):
             #
             ops = tf.get_default_graph().get_operations()
             print("ops", ops)
-            #
+
             for op in tf.get_default_graph().get_operations():
                 print(str(op))
 
-            opt.run()
+            opt.run(feed_dict={readout: q_vals})
             print("tem")
 
         # update the old values

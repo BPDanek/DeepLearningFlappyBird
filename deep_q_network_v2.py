@@ -128,7 +128,7 @@ def trainNetwork(s, readout, h_fc1, sess):
     Q_val_a = tf.placeholder(dtype=float, shape=(10,), name='Q_val_noflap')  # Q_vals[:, NO_FLAP]
     Q_val_b = tf.placeholder(dtype=float, shape=(10,), name='Q_val_flap')  # Q_vals[:, FLAP]
     hinge_loss = tf.nn.relu(Q_val_b - Q_val_a + BOUNDARY_TOLERANCE)
-    optimizer = tf.train.AdamOptimizer(OPT_STEP).minimize(loss=hinge_loss, var_list=())
+    optimizer = tf.train.AdamOptimizer(OPT_STEP).minimize(loss=hinge_loss)
 
     # start training
     epsilon = INITIAL_EPSILON

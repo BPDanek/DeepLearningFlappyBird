@@ -47,6 +47,10 @@ REPLAY_MEMORY = 50000 # number of previous transitions to remember
 BATCH = 32 # size of minibatch
 FRAME_PER_ACTION = 1
 
+def adv_weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev = 0.05)
+    return tf.Variable(initial, trainable=True)
+
 def weight_variable(shape):
     initial = tf.truncated_normal(shape, stddev = 0.01)
     return tf.Variable(initial, trainable=False)
@@ -62,8 +66,16 @@ def max_pool_2x2(x):
     return tf.nn.max_pool(x, ksize = [1, 2, 2, 1], strides = [1, 2, 2, 1], padding = "SAME")
 
 def createNetwork():
+
+    # new vars for optimization
+    initial = tf.truncated_normal(shape=[80, 80, 4], mean=(255.0 / 2), stddev=(255 * (0.01 ** 0.5)))
+    delta_s = tf.Variable(
+        name="added_perturbation",
+        initial_value=initial,
+        trainable=True)
+
     # network weights
-    W_conv1 = weight_variable([8, 8, 4, 32])
+    W_conv1 = adv_weight_variable([8, 8, 4, 32])
     b_conv1 = bias_variable([32])
 
     W_conv2 = weight_variable([4, 4, 32, 64])
@@ -78,15 +90,13 @@ def createNetwork():
     W_fc2 = weight_variable([512, ACTIONS])
     b_fc2 = bias_variable([ACTIONS])
 
-    # new vars for optimization
-    delta_s = tf.Variable(
-        name="added_perturbation",
-        initial_value=tf.random.normal([80, 80, 4], mean=(255.0 / 2), stddev=(255 * (0.01 ** 0.5))),
-        trainable=True)
+    # tf.convert_to_tensor([-1, 80, 80, 4])
 
     # input layer
     s = tf.placeholder("float", [None, 80, 80, 4])
-    s_opt = tf.add(s, delta_s)
+    tf.expand_dims(delta_s, axis=0)
+    s_opt = s + delta_s # todo: why cant we add this just like the bias
+    # s_opt = conv2d(s, delta_s, 4)
 
     # hidden layers
     h_conv1 = tf.nn.relu(conv2d(s_opt, W_conv1, 4) + b_conv1)
@@ -111,18 +121,18 @@ def createNetwork():
 def trainNetwork(s, readout, h_fc1, sess):
 
     eps = 1  # Q values are typically 10- 30
-    q_noflap = tf.placeholder(shape=(INTERVAL,), dtype=float)
-    q_flap = tf.placeholder(shape=(INTERVAL,), dtype=float)
-    hinge_loss = tf.reduce_sum(tf.nn.relu(tf.add(tf.subtract(readout[:,0], readout[:,1]), eps)))
+    q_noflap = tf.placeholder(shape=(1,), dtype=float)
+    q_flap = tf.placeholder(shape=(1,), dtype=float)
     # hinge_loss = tf.nn.relu(q_noflap - q_flap + eps)
+    hinge_loss = tf.reduce_sum(tf.nn.relu(tf.add(tf.subtract(readout[:,0], readout[:,1]), eps)))
     opt = tf.train.AdamOptimizer(LR).minimize(loss=hinge_loss)
 
-    # define the cost function
-    a = tf.placeholder("float", [None, ACTIONS])
-    y = tf.placeholder("float", [None])
-    readout_action = tf.reduce_sum(tf.multiply(readout, a), reduction_indices=1)
-    cost = tf.reduce_mean(tf.square(y - readout_action))
-    train_step = tf.train.AdamOptimizer(1e-6).minimize(loss=hinge_loss)
+    # # define the cost function
+    # a = tf.placeholder("float", [None, ACTIONS])
+    # y = tf.placeholder("float", [None])
+    # readout_action = tf.reduce_sum(tf.multiply(readout, a), reduction_indices=1)
+    # cost = tf.reduce_mean(tf.square(y - readout_action))
+    # train_step = tf.train.AdamOptimizer(1e-6).minimize(loss=cost)
 
     # open up a game state to communicate with emulator
     game_state = game.GameState()
@@ -197,7 +207,7 @@ def trainNetwork(s, readout, h_fc1, sess):
                                   # save us some struggle with the saver
 
             # sample a minibatch to optimize on, the entire sequence of frames thus far in the program
-            opt_batch = random.sample(list(D), INTERVAL)
+            opt_batch = random.sample(list(D), 1)
 
             # get the batch variables
             s_opt_batch = [d[0] for d in opt_batch] # only take stats form opt batch
@@ -225,8 +235,8 @@ def trainNetwork(s, readout, h_fc1, sess):
             # ds generates automatically
             # then you use s+ds as your new input
             # talk after meeting have Q's
-            q_vals = tf.placeholder("float", shape=[None, 80, 80, 4], name="q_vals") # readout_s_ds[1]
-            q_vals = readout.eval(feed_dict={s : [s_opt_batch][0]})
+            # q_vals = tf.placeholder("float", shape=[80, 80, 4], name="q_vals") # readout_s_ds[1]
+            # q_vals = readout.eval(feed_dict={s : s_opt_batch})
 
             # readout(s) = [Q(no flap), Q(flap)]
             # a = readout[target_action]
@@ -237,14 +247,16 @@ def trainNetwork(s, readout, h_fc1, sess):
             # b = tf.placeholder("float", shape=[INTERVAL,], name="b") # readout_s_ds[0]
             # b_val = readout_s_ds[:,1]
             #
-            ops = tf.get_default_graph().get_operations()
-            print("ops", ops)
+            # ops = tf.get_default_graph().get_operations()
+            # print("ops", ops)
+            #
+            # for op in tf.get_default_graph().get_operations():
+            #     print(str(op))
 
-            for op in tf.get_default_graph().get_operations():
-                print(str(op))
+            sess.run(opt, feed_dict={s : s_opt_batch})
+            saver.save(sess, 'delta_s/' + GAME + '-trial', global_step = t)
+            break
 
-            opt.run(feed_dict={readout: q_vals})
-            print("tem")
 
         # update the old values
         s_t = s_t1
